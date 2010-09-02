@@ -4,7 +4,7 @@ The Abbyy to ALTO Converter
 
 This is a simple Converter written in PHP5 to convert Abbyy FineReader XML into the ALTO XML document format.
 
-The code is hosted on GitHub: http://github.com/Surfrdan/abbyytoalto
+The code is hosted on GitHub: http://github.com/Surfrdan/AbbyyToAlto 
 
 The command takes 2 arguments, an input and an output file. e.g.
 
