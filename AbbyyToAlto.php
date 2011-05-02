@@ -23,6 +23,7 @@ class AbbyyToAlto
      * @link http://www.abbyy.com/FineReader_xml/FineReader8-schema-v2.xml 
      */
     const ABBYY_NS = 'http://www.abbyy.com/FineReader_xml/FineReader8-schema-v2.xml';
+    const ABBYY6_NS = 'http://www.abbyy.com/FineReader_xml/FineReader6-schema-v1.xml';
 
     protected $_abbyyDom;
     protected $_altoDom;
@@ -37,6 +38,8 @@ class AbbyyToAlto
 
     protected $_altoFilename;
     protected $_abbyyFilename;
+    
+    protected $_abbyyVersion;
  
     /**
      * AbbyyToAlto Constructor  
@@ -54,6 +57,7 @@ class AbbyyToAlto
         $this->_stringCount = 0;
         $this->_confidenceTotal = 0;
         $this->_characterCount = 0;
+        $this->_abbyyVersion = 8;
     }
 
     /**
@@ -77,13 +81,19 @@ class AbbyyToAlto
     protected function _addPages() 
     {
         $abbyyPages = $this->_abbyyDom->getElementsByTagNameNS(self::ABBYY_NS, 'page');
+        if ($abbyyPages->length == 0) {
+            $this->_abbyyVersion = 6;
+            $abbyyPages = $this->_abbyyDom->getElementsByTagNameNS(self::ABBYY6_NS, 'page');
+        }
         foreach ($abbyyPages as $abbyyPage) {
             $this->_pageCount++;
+            echo "Page " . $this->_pageCount . " ";
             $height     = $abbyyPage->getAttribute('height');
             $width      = $abbyyPage->getAttribute('width');
             $altoPage = $this->_addPage("Page_{$this->_pageCount}", $height, $width, $this->_pageCount);
             $this->_addPrintSpace($abbyyPage,$altoPage);
-        }    
+            echo "\n";
+        }  
     }
     
     /**
@@ -96,46 +106,48 @@ class AbbyyToAlto
         $xpath = new DOMXpath($this->_abbyyDom);
 
         $abbyyPageBlocks = $abbyyPage->getElementsByTagName('block');
-        
-        $l = null;
-        $t = null;
-        $r = null;
-        $b = null;
-        
-        for ($i = 0; $i < $abbyyPageBlocks->length; $i++) {
-            $abbyyPageBlock = $abbyyPageBlocks->item($i);
-            $this->_pageBlockCount++;
-
-            if ($abbyyPageBlock->getAttribute('l') < $l || is_null($l) ) {
-                $l = $abbyyPageBlock->getAttribute('l');
-            }
+        if ($abbyyPageBlocks->length > 0)
+        {
+            $l = null;
+            $t = null;
+            $r = null;
+            $b = null;
             
-            if ($abbyyPageBlock->getAttribute('t') < $t || is_null($t)) {
-                $t = $abbyyPageBlock->getAttribute('t');
+            for ($i = 0; $i < $abbyyPageBlocks->length; $i++) {
+                $abbyyPageBlock = $abbyyPageBlocks->item($i);
+                $this->_pageBlockCount++;
+    
+                if ($abbyyPageBlock->getAttribute('l') < $l || is_null($l) ) {
+                    $l = $abbyyPageBlock->getAttribute('l');
+                }
+                
+                if ($abbyyPageBlock->getAttribute('t') < $t || is_null($t)) {
+                    $t = $abbyyPageBlock->getAttribute('t');
+                }
+                
+                if ($abbyyPageBlock->getAttribute('r') > $r || is_null($r)) {
+                    $r = $abbyyPageBlock->getAttribute('r');
+                }
+                if ($abbyyPageBlock->getAttribute('b') > $b || is_null($b)) {
+                    $b = $abbyyPageBlock->getAttribute('b'); 
+                }
             }
+            $hpos = $l;
+            $vpos = $t;
+            $height = $b - $t;
+            $width  = $r - $l;
             
-            if ($abbyyPageBlock->getAttribute('r') > $r || is_null($r)) {
-                $r = $abbyyPageBlock->getAttribute('r');
-            }
-            if ($abbyyPageBlock->getAttribute('b') > $b || is_null($b)) {
-                $b = $abbyyPageBlock->getAttribute('b'); 
-            }
+    
+            $printSpace = $this->_altoDom->createElementNS(self::ALTO_NS, 'PrintSpace');
+            $altoPage->appendChild($printSpace);
+            $printSpace->setAttributeNS(self::ALTO_NS, 'alto:ID', "PrintSpace_1");
+            $printSpace->setAttributeNS(self::ALTO_NS, 'alto:HPOS', $hpos);
+            $printSpace->setAttributeNS(self::ALTO_NS, 'alto:VPOS', $vpos);
+            $printSpace->setAttributeNS(self::ALTO_NS, 'alto:HEIGHT', $height);
+            $printSpace->setAttributeNS(self::ALTO_NS, 'alto:WIDTH', $width);
+            
+            $this->_addTextBlocks($printSpace,$abbyyPageBlock); 
         }
-        $hpos = $l;
-        $vpos = $t;
-        $height = $b - $t;
-        $width  = $r - $l;
-        
-
-        $printSpace = $this->_altoDom->createElementNS(self::ALTO_NS, 'PrintSpace');
-        $altoPage->appendChild($printSpace);
-        $printSpace->setAttributeNS(self::ALTO_NS, 'alto:ID', "PrintSpace_1");
-        $printSpace->setAttributeNS(self::ALTO_NS, 'alto:HPOS', $hpos);
-        $printSpace->setAttributeNS(self::ALTO_NS, 'alto:VPOS', $vpos);
-        $printSpace->setAttributeNS(self::ALTO_NS, 'alto:HEIGHT', $height);
-        $printSpace->setAttributeNS(self::ALTO_NS, 'alto:WIDTH', $width);
-        
-        $this->_addTextBlocks($printSpace,$abbyyPageBlock); 
     }
 
     /**
@@ -186,7 +198,8 @@ class AbbyyToAlto
             $altoTextBlock->setAttributeNS(self::ALTO_NS, 'alto:WIDTH', $width);
             
             $this->_addTextLines($altoTextBlock, $abbyyPar);
-        }
+            echo '.';
+       }
     }
 
     /**
@@ -248,7 +261,7 @@ class AbbyyToAlto
                 $this->_characterCount++;
                 $this->_confidenceTotal += $abbyyCharParams->item($c)->getAttribute('charConfidence');
             }
-            if (!($abbyyCharParams->item($c+1) instanceof DOMElement) || $abbyyCharParams->item($c+1)->nodeValue == ' ') {
+            if (!($abbyyCharParams->item($c+1) instanceof DOMElement) || $abbyyCharParams->item($c+1)->nodeValue == ' ' || $abbyyCharParams->item($c+1)->nodeValue == '') {
                 //if ($abbyyCharParams->item($c+1)->nodeValue == ' ') {
                     $this->_stringCount++;
                     // if last character of a string, set height and width
