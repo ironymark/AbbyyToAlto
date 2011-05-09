@@ -39,18 +39,26 @@ class AbbyyToAlto
     protected $_altoFilename;
     protected $_abbyyFilename;
     
+    protected $docName;
+    
     protected $_abbyyVersion;
  
+    protected $_altoStyle;
+    protected $altoStylesMap;// = array();
     /**
      * AbbyyToAlto Constructor  
      */
     public function __construct() 
     {
         $this->_abbyyDom = new DOMDocument('1.0', 'utf-8');
+        $this->_pageCount = 0;
+        $this->init();
+    }
+    protected function init(){
         $this->_altoDom = new DOMDocument('1.0', 'utf-8');
+        $this->_altoStyle = $this->_altoDom->createElementNS(self::ALTO_NS, 'Styles');
         $this->_altoDom->preserveWhiteSpace = TRUE; 
         $this->_altoDom->formatOutput = TRUE;
-        $this->_pageCount = 0;
         $this->_pageBlockCount = 0;
         $this->_textBlockCount = 0;
         $this->_textLineCount = 0;
@@ -58,44 +66,50 @@ class AbbyyToAlto
         $this->_confidenceTotal = 0;
         $this->_characterCount = 0;
         $this->_abbyyVersion = 8;
+        $this->altoStylesMap = array();
     }
 
     /**
      * Convert AbbyyFinereader XML to ALTO XML
      * @param mixed $input Finereader XML Filename 
      */
-    public function convert($input) 
+    public function convert($input,$output) 
     {
         $inputFilename = dirname(__FILE__) . DIRECTORY_SEPARATOR . $input; 
          
         $this->_abbyyDom->load($inputFilename);
         $this->_abbyyFilename = $inputFilename;
-        $this->_addAltoHeader();
-        $this->_addLayout();
-        $this->_addAltoConfidence();
-    }
 
-    /**
-     * Add ALTO Pages  
-     */
-    protected function _addPages() 
-    {
+        $tmp = explode(".",$output);
+
+                
         $abbyyPages = $this->_abbyyDom->getElementsByTagNameNS(self::ABBYY_NS, 'page');
         if ($abbyyPages->length == 0) {
             $this->_abbyyVersion = 6;
             $abbyyPages = $this->_abbyyDom->getElementsByTagNameNS(self::ABBYY6_NS, 'page');
         }
+        
         foreach ($abbyyPages as $abbyyPage) {
-            $this->_pageCount++;
-            echo "Page " . $this->_pageCount . " ";
-            $height     = $abbyyPage->getAttribute('height');
-            $width      = $abbyyPage->getAttribute('width');
-            $altoPage = $this->_addPage("Page_{$this->_pageCount}", $height, $width, $this->_pageCount);
+            $height         = $abbyyPage->getAttribute('height');
+            $width          = $abbyyPage->getAttribute('width');
+            $resolution     = $abbyyPage->getAttribute('resolution');
+            $this->docName  = $tmp[0];
+            $this->docName .= "_Pg_".$this->_pageCount;
+            $this->_addAltoHeader($resolution);
+            $layout         = $this->_addLayout();
+            $altoPage       = $this->_addPage("Page.{$this->_pageCount}", $height, $width, $this->_pageCount, $layout);
             $this->_addPrintSpace($abbyyPage,$altoPage);
-            echo "\n";
+            $this->_addAltoConfidence();
+            $this->_altoDom->documentElement->appendChild($this->_altoStyle);
+            $this->toFile($this->docName.".xml");
+            
+            echo "Page {$this->_pageCount} converted successfully\n";
+            $this->_pageCount++;
+            $this->init();
         }  
+        
     }
-    
+
     /**
      * Add ALTO PrintSpace Element
      * @param DOMElement $abbyyPage AbbyyFinereader page element 
@@ -106,6 +120,7 @@ class AbbyyToAlto
         $xpath = new DOMXpath($this->_abbyyDom);
 
         $abbyyPageBlocks = $abbyyPage->getElementsByTagName('block');
+        
         if ($abbyyPageBlocks->length > 0)
         {
             $l = null;
@@ -140,13 +155,23 @@ class AbbyyToAlto
     
             $printSpace = $this->_altoDom->createElementNS(self::ALTO_NS, 'PrintSpace');
             $altoPage->appendChild($printSpace);
-            $printSpace->setAttributeNS(self::ALTO_NS, 'alto:ID', "PrintSpace_1");
-            $printSpace->setAttributeNS(self::ALTO_NS, 'alto:HPOS', $hpos);
-            $printSpace->setAttributeNS(self::ALTO_NS, 'alto:VPOS', $vpos);
-            $printSpace->setAttributeNS(self::ALTO_NS, 'alto:HEIGHT', $height);
-            $printSpace->setAttributeNS(self::ALTO_NS, 'alto:WIDTH', $width);
+            $printSpace->setAttribute( 'ID', "PS.0");
+            $printSpace->setAttribute( 'HPOS', $hpos);
+            $printSpace->setAttribute( 'VPOS', $vpos);
+            $printSpace->setAttribute( 'HEIGHT', $height);
+            $printSpace->setAttribute( 'WIDTH', $width);
             
-            $this->_addTextBlocks($printSpace,$abbyyPageBlock); 
+            for ($i = 0; $i < $abbyyPageBlocks->length; $i++) {
+                $abbyyPageBlock = $abbyyPageBlocks->item($i);
+                if($abbyyPageBlock->getAttribute('blockType') != "Text")
+                    continue;
+                $this->_addTextBlocks($printSpace,$abbyyPageBlock);
+            }
+            
+            if($this->_textBlockCount==0) {
+                $dummy = $this->_altoDom->createElementNS(self::ALTO_NS, 'Empty');
+                $printSpace->appendChild($dummy);
+            }
         }
     }
 
@@ -155,50 +180,46 @@ class AbbyyToAlto
      * @param DOMElement $printSpace ALTO PrintSpace element 
      * @param DOMElement $abbyyPageBLock AbbyyFinereader block element 
      */
-    protected function _addTextBlocks($printSpace,$abbyyPageBlock)
+    protected function _addTextBlocks($printSpace,$abbyyPageBlock) {
+        $l = $abbyyPageBlock->getAttribute('l');
+        $t = $abbyyPageBlock->getAttribute('t');
+        $r = $abbyyPageBlock->getAttribute('r');
+        $b = $abbyyPageBlock->getAttribute('b');
+        $hpos = $l;
+        $vpos = $t;
+        $height = $b - $t;
+        $width  = $r - $l;
+        
+        $this->_textBlockCount++;
+        $this->_stringCount = 0;
+        $this->_textLineCount = 0;
+        
+        $altoTextBlock = $this->_altoDom->createElementNS(self::ALTO_NS, 'TextBlock');
+        $printSpace->appendChild($altoTextBlock);
+        $altoTextBlock->setAttribute('ID', "TB.{$this->docName}.{$this->_textBlockCount}");
+        $altoTextBlock->setAttribute('HPOS', $hpos);
+        $altoTextBlock->setAttribute('VPOS', $vpos);
+        $altoTextBlock->setAttribute('HEIGHT', $height);
+        $altoTextBlock->setAttribute('WIDTH', $width);
+
+        $abbyyTexts = $abbyyPageBlock->getElementsByTagName('text');
+        for ($i = 0; $i < $abbyyTexts->length; $i++) {
+            $abbyyText = $abbyyTexts->item($i);
+            $this->_addParagraph($altoTextBlock,$abbyyText);
+        } 
+    }
+
+    /**
+     * Add ALTO Paragraph Elements
+     * @param DOMElement $altoTextBLock ALTO TextBlock element 
+     * @param DOMElement $abbyyTexts AbbyyFinereader text element 
+     */
+    protected function _addParagraph($altoTextBlock,$abbyyText)
     {
-        $abbyyPars = $abbyyPageBlock->getElementsByTagName('par');
+        $abbyyPars = $abbyyText->getElementsByTagName('par');
         for ($i = 0; $i < $abbyyPars->length; $i++) {
             $abbyyPar = $abbyyPars->item($i);
-            $this->_textBlockCount++;
-            //$itemCount = $abbyyPar->getElementsByTagName('charParams')->length - 1;
-            
-            $l = null;
-            $t = null;
-            $r = null;
-            $b = null;
-            
-            for ($c = 0; $c < $abbyyPar->getElementsByTagName('charParams')->length; $c++) {
-                if ($abbyyPar->getElementsByTagName('charParams')->item($c)->getAttribute('l') < $l || is_null($l) ) {
-                    $l = $abbyyPar->getElementsByTagName('charParams')->item($c)->getAttribute('l');
-                }
-                
-                if ($abbyyPar->getElementsByTagName('charParams')->item($c)->getAttribute('t') < $t || is_null($t)) {
-                    $t = $abbyyPar->getElementsByTagName('charParams')->item($c)->getAttribute('t');
-                }
-                
-                if ($abbyyPar->getElementsByTagName('charParams')->item($c)->getAttribute('r') > $r || is_null($r)) {
-                    $r = $abbyyPar->getElementsByTagName('charParams')->item($c)->getAttribute('r');
-                }
-                if ($abbyyPar->getElementsByTagName('charParams')->item($c)->getAttribute('b') > $b || is_null($b)) {
-                    $b = $abbyyPar->getElementsByTagName('charParams')->item($c)->getAttribute('b'); 
-                }
-            }
-            $hpos = $l;
-            $vpos = $t;
-            $height = $b - $t;
-            $width  = $r - $l;
-            
-            $altoTextBlock = $this->_altoDom->createElementNS(self::ALTO_NS, 'TextBlock');
-            $printSpace->appendChild($altoTextBlock);
-            $altoTextBlock->setAttributeNS(self::ALTO_NS, 'alto:ID', "TextBlock_{$this->_textBlockCount}");
-            $altoTextBlock->setAttributeNS(self::ALTO_NS, 'alto:HPOS', $hpos);
-            $altoTextBlock->setAttributeNS(self::ALTO_NS, 'alto:VPOS', $vpos);
-            $altoTextBlock->setAttributeNS(self::ALTO_NS, 'alto:HEIGHT', $height);
-            $altoTextBlock->setAttributeNS(self::ALTO_NS, 'alto:WIDTH', $width);
-            
             $this->_addTextLines($altoTextBlock, $abbyyPar);
-            echo '.';
        }
     }
 
@@ -211,7 +232,7 @@ class AbbyyToAlto
     {
         $abbyyLines = $abbyyPar->getElementsByTagName('line');
         foreach ($abbyyLines as $abbyyLine) {
-            $this->_textLineCount++;
+            
             $itemCount = $abbyyLine->getElementsByTagName('charParams')->length - 1;
             $l = $abbyyLine->getElementsByTagName('charParams')->item(0)->getAttribute('l');
             $t = $abbyyLine->getElementsByTagName('charParams')->item(0)->getAttribute('t');
@@ -225,24 +246,81 @@ class AbbyyToAlto
         
             $altoTextLine = $this->_altoDom->createElementNS(self::ALTO_NS, 'TextLine');
             $altoTextBlock->appendChild($altoTextLine);
-            $altoTextLine->setAttributeNS(self::ALTO_NS, 'alto:ID', "TextLine_{$this->_textLineCount}");
-            $altoTextLine->setAttributeNS(self::ALTO_NS, 'alto:HPOS', $hpos);
-            $altoTextLine->setAttributeNS(self::ALTO_NS, 'alto:VPOS', $vpos);
-            $altoTextLine->setAttributeNS(self::ALTO_NS, 'alto:HEIGHT', $height);
-            $altoTextLine->setAttributeNS(self::ALTO_NS, 'alto:WIDTH', $width);
-            
-            $this->_addStrings($altoTextLine, $abbyyLine);
+            $altoTextLine->setAttribute('ID', "TB.{$this->docName}.{$this->_textBlockCount}_{$this->_textLineCount}");
+            $altoTextLine->setAttribute('HPOS', $hpos);
+            $altoTextLine->setAttribute('VPOS', $vpos);
+            $altoTextLine->setAttribute('HEIGHT', $height);
+            $altoTextLine->setAttribute('WIDTH', $width);
+            $this->_addStyles($altoTextLine, $abbyyLine);
+            $this->_textLineCount++;
         }
     }
 
     /**
-     * Add ALTO String Elements
+     * Add ALTO Styles Element
      * @param DOMElement $altoTextLine ALTO TextLine element 
      * @param DOMElement $abbyyLine AbbyyFinereader line element 
      */
-    protected function _addStrings($altoTextLine, $abbyyLine) 
+ 	protected function _addStyles($altoTextLine, $abbyyLine){
+ 		$abbyyFormattings = $abbyyLine->getElementsByTagName('formatting');
+ 		//echo $abbyyFormattings->length."\n";
+        foreach ($abbyyFormattings as $abbyyFormatting) {
+        	 $lang = $abbyyFormatting->getAttribute("lang");
+        	 $ff = $abbyyFormatting->getAttribute("ff");//font family
+        	 $fs = $abbyyFormatting->getAttribute("fs");
+        	 $underline = $abbyyFormatting->getAttribute("underline");
+        	 $bold = $abbyyFormatting->getAttribute("bold");
+        	 $italic = $abbyyFormatting->getAttribute("italic");
+        	 $smallcaps = $abbyyFormatting->getAttribute("smallcaps");
+        	 
+        	 //echo "$lang, $ff, $fs, $underline, $bold, $italic, $smallcaps\n";
+        	 $FONTSIZE = $fs;
+        	 if(strrchr($fs, ".") === false)
+        	 	$FONTSIZE .= ".0";
+        	 else
+        	 	$FONTSIZE .= "0";
+        	 	
+        	 $B = ($bold=="true")?"B":"";
+        	 $I = ($italic=="true")?"I":"";
+        	 $M = ($smallcaps=="true")?"M":"";
+
+        	 $B1 = ($bold=="true")?"bold":"";
+        	 $I1 = ($italic=="true")?"italics":"";
+        	 $M1 = ($smallcaps=="true")?"smallcaps":"";
+
+        	 $FONTTYPE = "sans-serif";
+        	 $A = "A";
+        	 if($ff == "Times New Roman"){
+        	 	$FONTTYPE = "serif";
+        	 	$A = "";
+        	 }
+        	 
+        	 $ID = "TS_".$FONTSIZE."_".$B.$I.$M.$A;
+        	 $FONTSTYLE = "$B1 $I1 $M1";
+			if(isset($this->altoStylesMap[$ID])==null){
+	            $altoTextStyle = $this->_altoDom->createElementNS(self::ALTO_NS, 'TextStyle');
+	            $this->_altoStyle->appendChild($altoTextStyle);
+	            $altoTextStyle->setAttribute('ID', $ID);
+	            $altoTextStyle->setAttribute('FONTSIZE', $FONTSIZE);
+	            $altoTextStyle->setAttribute('FONTSTYLE', $FONTSTYLE);
+	            $altoTextStyle->setAttribute('FONTTYPE', $FONTTYPE);
+	            $altoTextStyle->setAttribute('FONTWIDTH', "proportional");
+				$this->altoStylesMap[$ID] = $ID;	 				
+			}        	    	 
+        	 $this->_addStrings($altoTextLine, $abbyyFormatting, $ID)	;
+        	 //echo "$ID, $FONTSIZE, $FONTSTYLE, $FONTTYPE\n";
+        }
+ 	}
+
+    /**
+     * Add ALTO String Elements
+     * @param DOMElement $altoTextLine ALTO TextLine element 
+     * @param DOMElement $abbyyFormatting AbbyyFinereader formatting element 
+     * @param DOMElement $styleID unique id of the style 
+     */
+    protected function _addStrings($altoTextLine, $abbyyFormatting, $styleID) 
     {
-        $abbyyCharParams = $abbyyLine->getElementsByTagName('charParams');
+        $abbyyCharParams = $abbyyFormatting->getElementsByTagName('charParams');
         $charCount = $abbyyCharParams->length;
         $string = '';
         $l = null;
@@ -263,7 +341,6 @@ class AbbyyToAlto
             }
             if (!($abbyyCharParams->item($c+1) instanceof DOMElement) || $abbyyCharParams->item($c+1)->nodeValue == ' ' || $abbyyCharParams->item($c+1)->nodeValue == '') {
                 //if ($abbyyCharParams->item($c+1)->nodeValue == ' ') {
-                    $this->_stringCount++;
                     // if last character of a string, set height and width
                     $r = $abbyyCharParams->item($c)->getAttribute('r');
                     $b = $abbyyCharParams->item($c)->getAttribute('b');
@@ -275,12 +352,20 @@ class AbbyyToAlto
                     
                     $altoString = $this->_altoDom->createElementNS(self::ALTO_NS, 'String');
                     $altoTextLine->appendChild($altoString);
-                    $altoString->setAttributeNS(self::ALTO_NS, 'alto:ID', "String_{$this->_stringCount}");
-                    $altoString->setAttributeNS(self::ALTO_NS, 'alto:CONTENT', $string);
-                    $altoString->setAttributeNS(self::ALTO_NS, 'alto:HPOS', $hpos);
-                    $altoString->setAttributeNS(self::ALTO_NS, 'alto:VPOS', $vpos);
-                    $altoString->setAttributeNS(self::ALTO_NS, 'alto:HEIGHT', $height);
-                    $altoString->setAttributeNS(self::ALTO_NS, 'alto:WIDTH', $width);
+                    $altoString->setAttribute('ID', "TB.{$this->docName}.{$this->_textBlockCount}_{$this->_textLineCount}_{$this->_stringCount}");
+                    $altoString->setAttribute('CONTENT', $string);
+                    $altoString->setAttribute('HPOS', $hpos);
+                    $altoString->setAttribute('VPOS', $vpos);
+                    $altoString->setAttribute('HEIGHT', $height);
+                    $altoString->setAttribute('WIDTH', $width);
+                    $altoString->setAttribute('STYLEREFS', $styleID);
+
+                    $altoString = $this->_altoDom->createElementNS(self::ALTO_NS, 'SP');
+                    $altoTextLine->appendChild($altoString);
+                    $altoString->setAttribute('HPOS', $hpos);
+                    $altoString->setAttribute('VPOS', $vpos+$width);
+                    $altoString->setAttribute('HEIGHT', $height);
+                    $altoString->setAttribute('WIDTH', "1.0");
                     
                     $l = null;
                     $t = null;
@@ -289,6 +374,8 @@ class AbbyyToAlto
                     
                     $string = '';
                     $c++;
+                    $this->_stringCount++;
+                    
                 //}
             }
         }
@@ -297,15 +384,16 @@ class AbbyyToAlto
 
     /**
      * Add ALTO Document Header
+     * @param integer $resolution Abbyy resolution
      */
-    protected function _addAltoHeader() 
+    protected function _addAltoHeader($resolution) 
     {
         $alto = $this->_altoDom->createElementNS(self::ALTO_NS, 'alto');
         $this->_altoDom->appendChild($alto);
-        $alto->setAttributeNS(self::ALTO_NS, 
+        $alto->setAttribute(
                             'xsi', 
                             'http://www.w3.org/2001/XMLSchema-instance');
-        $alto->setAttributeNS(self::ALTO_NS, 
+        $alto->setAttribute(
                             'alto', 
                             'http://www.loc.gov/standards/alto http://www.loc.gov/standards/alto/alto-v2.0.xsd');
         
@@ -313,7 +401,8 @@ class AbbyyToAlto
         $description = $this->_altoDom->createElementNS(self::ALTO_NS, 'Description');
         $alto->appendChild($description);
         
-        $measurementUnit = $this->_altoDom->createElementNS(self::ALTO_NS, 'MeasurementUnit');
+        $measurementUnit = $this->_altoDom->createElementNS(self::ALTO_NS, 'MeasurementUnit', "inch".$resolution);
+        
         $description->appendChild($measurementUnit);
         
         $sourceImageInformation = $this->_altoDom->createElementNS(self::ALTO_NS, 'sourceImageInformation');
@@ -325,7 +414,7 @@ class AbbyyToAlto
         
         $ocrProcessing = $this->_altoDom->createElementNS(self::ALTO_NS, 'OCRProcessing');
         $description->appendChild($ocrProcessing);
-        $ocrProcessing->setAttributeNS(self::ALTO_NS, 'alto:ID', 'OCR_1');
+        $ocrProcessing->setAttribute('ID', 'OCR_1');
         
         $ocrProcessingStep = $this->_altoDom->createElementNS(self::ALTO_NS, 'ocrProcessingStep');
         $ocrProcessing->appendChild($ocrProcessingStep);
@@ -358,7 +447,7 @@ class AbbyyToAlto
     {
         $layout = $this->_altoDom->createElementNS(self::ALTO_NS, 'Layout');
         $this->_altoDom->documentElement->appendChild($layout);
-        $this->_addPages();
+        return $layout;
     }
 
     /**
@@ -369,14 +458,14 @@ class AbbyyToAlto
      * @param mixed $physicalImageNr Page Physical Image Number
      * @param mixed $quality Page Quality Information 
      */    
-    protected function _addPage($id, $height, $width, $physicalImageNr) 
+    protected function _addPage($id, $height, $width, $physicalImageNr, $layout) 
     {    
         $page = $this->_altoDom->createElementNS(self::ALTO_NS, 'Page');
-        $this->_altoDom->documentElement->appendChild($page);
-        $page->setAttributeNS(self::ALTO_NS, 'alto:ID', $id);
-        $page->setAttributeNS(self::ALTO_NS, 'alto:HEIGHT', $height);
-        $page->setAttributeNS(self::ALTO_NS, 'alto:WIDTH', $width);
-        $page->setAttributeNS(self::ALTO_NS, 'alto:PHYSICAL_IMAGE_NR', $physicalImageNr);
+        $layout->appendChild($page);
+        $page->setAttribute('ID', $id);
+        $page->setAttribute('HEIGHT', $height);
+        $page->setAttribute('WIDTH', $width);
+        $page->setAttribute('PHYSICAL_IMG_NR', $physicalImageNr);
         return $page;
     }
     
@@ -402,5 +491,14 @@ class AbbyyToAlto
 }
  
 $abbyyToAlto = new AbbyyToAlto;
-$abbyyToAlto->convert($argv[1]);
-$abbyyToAlto->toFile($argv[2]);
+if(!isset($argv[1])){
+	echo "Source document name is missing";
+	exit();
+}
+$output = "";
+
+if(!isset($argv[2]))
+	$output = "alto_".$argv[1];
+else 
+	$output = $argv[2]	;
+$abbyyToAlto->convert($argv[1], $output);
